@@ -1,14 +1,39 @@
+/*========================================================================================
+
+[ a n y m a ]
+AnyShut - (DMX) Beamer Shutter
+
+
+© 2024 Michael Egger AT anyma.ch
+Licensed under GNU GPL 3.0
+
+==========================================================================================*/
+//                                                                                      LIB
+
 #include <Arduino.h>
+#include "FS.h"
+
 #include "FastLED.h"
+
+#include "AnymaEspSettings.h"
+#include "AnyShutEspNetworking.h"
+#include "AnymaEspPins.h"
+#include "AnymaESPUtils.h"
+
+// TODO: Add FS Switch
+#include <LittleFS.h>
+
 // #include <ESP32Servo.h>
 #include "ServoEasing.hpp"
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <esp_now.h>
 
-#define PIN_SERVO 5
-#define PIN_PIXEL 17
-#define PIN_BUTTON 6
+AnymaEspSettings settings;
+AnymaEspNetworking networking;
+
+//----------------------------------------------------------------------------------------
+//																				                                     User Globals
 #define NUM_PIXEL 1
 CRGB pixel[NUM_PIXEL];
 ServoEasing myservo;
@@ -33,10 +58,8 @@ typedef struct esp_now_message
 } esp_now_message;
 
 bool peer_registered = false;
-esp_now_peer_info_t peerInfo;
 esp_now_message incoming_message;
 
-uint8_t broadcastAddress[] = {0xf4, 0x12, 0xfa, 0xc1, 0x68, 0x80};
 void send_shutter_state(int message_type);
 unsigned long last_ping_received;
 bool connected;
@@ -64,7 +87,7 @@ void set_shutter()
     myservo.detach();
   }
   send_shutter_state(MESS_SET_SHUTTER);
-  log_v("Time to move: %dms",millis()-start);
+  log_v("Time to move: %dms", millis() - start);
 }
 
 //--------------------------------------------------------------------------------
@@ -134,9 +157,20 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
   }
 }
 
-//===============================================================
+//========================================================================================
+//----------------------------------------------------------------------------------------
+//																				                                           Setup
 void setup()
 {
+
+  Serial.begin(115200);
+  vTaskDelay(pdMS_TO_TICKS(1000));
+  log_v("%s", PROJECT_PATH);
+  log_v("Version %s", FIRMWARE_VERSION);
+
+  log_v("________________________");
+  log_v("Setup");
+
   FastLED.addLeds<SK6812, PIN_PIXEL, GRB>(pixel, NUM_PIXEL);
   FastLED.setBrightness(100);
   for (int hue = 0; hue < 360; hue++)
@@ -145,39 +179,34 @@ void setup()
     delay(5);
     FastLED.show();
   }
-  log_v("Enable Wifi");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin();
-  delay(3000);
-  log_v("[DEFAULT] ESP32 Board MAC Address: ");
-  readMacAddress();
+
+  // Format if there is no Filesystem, Max open files = 10 for better Webserver stability
+  MAIN_FILE_SYSTEM.begin(true, "/littlefs", 10U);
+  file_list();
+  settings.begin();
+  networking.begin();
+
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   last_btn = digitalRead(PIN_BUTTON);
 
   myservo.setEasingType(EASE_CUBIC_IN_OUT); // EASE_LINEAR is default
 
-  // Init ESP-NOW
-  if (esp_now_init() != ESP_OK)
-  {
-    log_e("Error initializing ESP-NOW");
-    return;
-  }
-  // Register peer
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
+/* 
+  log_v("Enable Wifi");
+  WiFi.mode(WIFI_STA);
+  WiFi.begin();
+  delay(3000); */
+ 
+ 
+  log_v("Setup Done");
+  log_v("________________________");
 
-  // Add peer
-  if (esp_now_add_peer(&peerInfo) != ESP_OK)
-  {
-    Serial.println("Failed to add peer");
-    return;
-  }
-  esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
-  esp_now_register_send_cb(OnDataSent);
 }
 
-//===============================================================
+//========================================================================================
+//----------------------------------------------------------------------------------------
+//																				Loop
+
 void loop()
 {
   int btn = digitalRead(PIN_BUTTON);

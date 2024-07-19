@@ -40,6 +40,22 @@ unsigned long last_response;
 unsigned long last_button_press;
 bool ping_waiting;
 bool shutter_moving;
+
+// Insert your SSID
+constexpr char WIFI_SSID[] = "anyshut";
+
+int32_t getWiFiChannel(const char *ssid) {
+  if (int32_t n = WiFi.scanNetworks()) {
+      for (uint8_t i=0; i<n; i++) {
+          if (!strcmp(ssid, WiFi.SSID(i).c_str())) {
+              return WiFi.channel(i);
+          }
+      }
+  }
+  return 0;
+}
+
+
 //--------------------------------------------------------------------------------
 
 void readMacAddress()
@@ -117,6 +133,15 @@ void setup()
   }
   log_v("Enable Wifi");
   WiFi.mode(WIFI_STA);
+ int32_t channel = getWiFiChannel(WIFI_SSID);
+
+  WiFi.printDiag(Serial); // Uncomment to verify channel number before
+  esp_wifi_set_promiscuous(true);
+  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
+  esp_wifi_set_promiscuous(false);
+  WiFi.printDiag(Serial); // Uncomment to verify channel change after
+
+
   WiFi.begin();
   delay(3000);
   log_v("[DEFAULT] ESP32 Board MAC Address: ");
