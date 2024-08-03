@@ -38,16 +38,15 @@ AnymaEspNetworking networking;
 CRGB pixel[NUM_PIXEL];
 ServoEasing myservo;
 int last_btn;
-int shutterstate = 0;
 
-#define OFF_POS 30
-#define ON_POS 170
 #define SERVO_DEGREES_PER_SECOND 360
 
 #define PING_INTERVAL 2000
 
 #define MESS_GET_SHUTTER 1
 #define MESS_SET_SHUTTER 2
+#define MESS_DMX 3
+
 uint8_t baseMac[6];
 
 typedef struct esp_now_message
@@ -73,18 +72,18 @@ void set_shutter()
   FastLED.show();
   delay(20);
 
-  if (shutterstate == 0)
+  if (settings.shutter_closed == 0)
   {
 
-    myservo.attach(PIN_SERVO, ON_POS);
-    myservo.easeTo(OFF_POS, SERVO_DEGREES_PER_SECOND); // set the servo position according to the scaled value
-    myservo.detach();
+    //   myservo.attach(PIN_SERVO, ON_POS);
+    myservo.easeTo(settings.position_open, SERVO_DEGREES_PER_SECOND); // set the servo position according to the scaled value
+                                                                      // myservo.detach();
   }
   else
   {
-    myservo.attach(PIN_SERVO, OFF_POS);
-    myservo.easeTo(ON_POS, SERVO_DEGREES_PER_SECOND);
-    myservo.detach();
+    //  myservo.attach(PIN_SERVO, settings.position_open);
+    myservo.easeTo(settings.position_closed, SERVO_DEGREES_PER_SECOND);
+    //  myservo.detach();
   }
   send_shutter_state(MESS_SET_SHUTTER);
   log_v("Time to move: %dms", millis() - start);
@@ -111,7 +110,7 @@ void send_shutter_state(int message_type)
 {
   esp_now_message out_message;
   out_message.message = message_type;
-  out_message.param = shutterstate;
+  out_message.param = settings.shutter_closed;
   esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&out_message, sizeof(out_message));
 
   if (result == ESP_OK)
@@ -147,11 +146,33 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
   log_v("Message: %d", incoming_message.message);
   if (incoming_message.message == MESS_SET_SHUTTER)
   {
-    shutterstate = incoming_message.param;
+    settings.shutter_closed = incoming_message.param;
     set_shutter();
   }
   else if (incoming_message.message == MESS_GET_SHUTTER)
   {
+    send_shutter_state(MESS_GET_SHUTTER);
+    last_ping_received = millis();
+  }
+  else if (incoming_message.message == MESS_DMX)
+  {
+    if (incoming_message.param == 0)
+    {
+      settings.shutter_closed = 0;
+      set_shutter();
+    }
+    else if (incoming_message.param == 255)
+    {
+      settings.shutter_closed = 1;
+      set_shutter();
+    }
+    else
+    {
+      settings.shutter_closed = incoming_message.param > 127;
+      int servoVal = map(incoming_message.param, 0, 255, settings.position_open, settings.position_closed);
+      myservo.write(servoVal);
+    }
+
     send_shutter_state(MESS_GET_SHUTTER);
     last_ping_received = millis();
   }
@@ -190,17 +211,15 @@ void setup()
   last_btn = digitalRead(PIN_BUTTON);
 
   myservo.setEasingType(EASE_CUBIC_IN_OUT); // EASE_LINEAR is default
+  myservo.attach(PIN_SERVO, settings.position_closed);
+  /*
+    log_v("Enable Wifi");
+    WiFi.mode(WIFI_STA);s
+    WiFi.begin();
+    delay(3000); */
 
-/* 
-  log_v("Enable Wifi");
-  WiFi.mode(WIFI_STA);
-  WiFi.begin();
-  delay(3000); */
- 
- 
   log_v("Setup Done");
   log_v("________________________");
-
 }
 
 //========================================================================================
@@ -222,7 +241,7 @@ void loop()
     {
       log_v("Btn pressed");
 
-      shutterstate = shutterstate ? 0 : 1;
+      settings.shutter_closed = settings.shutter_closed ? 0 : 1;
       set_shutter();
     }
   }
@@ -238,13 +257,13 @@ void loop()
   delay(40);
 
   CRGB led_color;
-  if (!shutterstate)
+  if (!settings.shutter_closed)
   {
     led_color = connected ? CRGB::DarkGray : CRGB::Orange;
   }
   else
   {
-    led_color = connected ? CRGB::Blue : CRGB::DarkOrange;
+    led_color = connected ? CRGB::Blue : CRGB::Red;
   }
 
   if (pixel[0] != led_color)

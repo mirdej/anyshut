@@ -7,8 +7,12 @@
 #include "ArduinoJson.h"
 #include <aWOT.h>
 #include "MimeTypes.h"
+#include "ServoEasing.hpp"
 
 extern Application app;
+extern AnymaEspSettings settings;
+extern void set_shutter();
+extern ServoEasing myservo;
 
 #define __APP_USE_CORS_HEADERS 1
 // set to 1 to be able to run a development server on a remote machine
@@ -35,6 +39,20 @@ void setup_api()
               serializeJson(settings.get_json(), req); 
               res.end(); });
 
+ app.get("/api/servo", [](Request &req, Response &res)
+          { log_v("Servo reads %d", myservo.read());
+          res.print(myservo.read()); });
+
+  app.get("/api/shutter", [](Request &req, Response &res)
+          { res.print(settings.shutter_closed); });
+
+  /* app.get("/api/shutter/on") , [](Request &req, Response &res)
+          {
+              res.status(200);
+              res.set("Content-Type", "application/json");
+              serializeJson(settings.get_json(), req);
+              res.end(); });
+ */
   app.get("/api/deviceinfo", [](Request &req, Response &res)
           {
               JsonDocument doc;
@@ -80,6 +98,36 @@ void setup_api()
 
   //--------------------------------------------------------------------------------------------------------------------------------
   //-------------------------------------------------------------------------------------------------------------------------- PUT
+  app.put("/api/servo", [](Request &req, Response &res)
+          { 
+            int val = req.parseInt();
+            log_v("Servo. Got %d",val);
+            if (val < 0) val = 0;
+            if (val > 180) val = 180;
+
+            myservo.write(val);
+            res.status(200); });
+
+  app.put("/api/setposition/open", [](Request &req, Response &res)
+          { 
+            settings.position_open = myservo.read();
+            res.status(200); });
+
+  app.put("/api/setposition/closed", [](Request &req, Response &res)
+          { 
+            settings.position_closed = myservo.read();
+            res.status(200); });
+
+
+  app.put("/api/shutter", [](Request &req, Response &res)
+          { 
+            if (req.read() == '0') {
+              settings.shutter_closed = 0;
+            } else {
+              settings.shutter_closed = 1;
+            }
+            set_shutter();
+            res.print(settings.shutter_closed); });
 
   app.put("/api/settings", [](Request &req, Response &res)
           {
