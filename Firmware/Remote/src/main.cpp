@@ -131,6 +131,7 @@ void setup()
     delay(5);
     FastLED.show();
   }
+  
   log_v("Enable Wifi");
   WiFi.mode(WIFI_STA);
  int32_t channel = getWiFiChannel(WIFI_SSID);
