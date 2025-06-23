@@ -108,6 +108,14 @@ void led_task(void *)
 }
 
 //----------------------------------------------------------------------------------------
+void toggleShutter()
+{
+  char buf[20];
+  memset(buf, 0, sizeof(buf));
+  sprintf(buf, "%s", shutter_closed ? "OPEN" : "CLOSE");
+  Agora.tell(buf, sizeof(buf));
+}
+//----------------------------------------------------------------------------------------
 //																				                                      Button Task
 
 void button_task(void *)
@@ -148,10 +156,7 @@ void button_task(void *)
           }
           else if (i == 1) // Button 2
           {
-            char buf[20];
-            memset(buf, 0, sizeof(buf));
-            sprintf(buf, "%s", shutter_closed ? "OPEN" : "CLOSE");
-            Agora.tell(buf, sizeof(buf));
+            toggleShutter();
           }
           else if (i == 2)
           {
@@ -238,4 +243,50 @@ void loop()
 {
 
   delay(10);
+  static char lastVal;
+
+  dmx_packet_t packet;
+
+  if (dmx_receive(dmxPort, &packet, DMX_TIMEOUT_TICK))
+  {
+
+    /* We should check to make sure that there weren't any DMX errors. */
+    if (!packet.err)
+    {
+      /* If this is the first DMX data we've received, lets log it! */
+      if (!dmxIsConnected)
+      {
+        dmxIsConnected = true;
+        updateDisplay();
+      }
+
+      dmx_read(dmxPort, data, RX_SIZE);
+      uint8_t val = data[dmx_address] > 127 ? 1 : 0; // DMX values are 0-255, we use 0 for closed, 1 for open
+      if (val != lastVal)
+      {
+        shutter_closed = lastVal;
+        toggleShutter();
+        lastVal = val;
+      }
+    }
+
+    else
+    {
+      Serial.println("A DMX error occurred.");
+    }
+  }
+  else if (dmxIsConnected)
+  {
+
+    Serial.println("DMX was disconnected.");
+    updateDisplay();
+    dmxIsConnected = false;
+  }
+
+  if (lastInteraction > 0 && (millis() - lastInteraction) > 3000)
+  {
+    lastInteraction = 0;
+    preferences.putInt("dmx_address", dmx_address);
+    Serial.printf("DMX Address saved: %d\n", dmx_address);
+  }
 }
