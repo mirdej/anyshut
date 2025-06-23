@@ -9,15 +9,13 @@
 #define PIN_SCL 9
 #define PIN_SDA 10
 
-
 // +-----------------------------------------------------------------------+
 //                                                      Display Task
 TaskHandle_t display_task_handle;
 #define DISPLAY_TASK_PRIORITY 2
-#define DISPLAY_TASK_CORE 0
+#define DISPLAY_TASK_CORE 1
 #define DISPLAY_TASK_DELAY 1000
 #define DISPLAY_TASK_STACK_SIZE 4000
-
 
 extern uint32_t device_delay;
 
@@ -37,27 +35,6 @@ U8G2_SSD1306_128X64_NONAME_F_HW_I2C u8g2(U8G2_R0,
 #define ALIGN_RIGHT(t) (LCDWidth - u8g2.getUTF8Width(t))
 #define ALIGN_LEFT 0
 
-#define MIN_RSSI -100
-#define MAX_RSSI -55
-
-static int calculateSignalLevel(int rssi, int numLevels)
-{
-    if (rssi <= MIN_RSSI)
-    {
-        return 0;
-    }
-    else if (rssi >= MAX_RSSI)
-    {
-        return numLevels - 1;
-    }
-    else
-    {
-        float inputRange = (MAX_RSSI - MIN_RSSI);
-        float outputRange = (numLevels - 1);
-        return (int)((float)(rssi - MIN_RSSI) * outputRange / inputRange);
-    }
-}
-
 void intro()
 {
 
@@ -68,42 +45,120 @@ void intro()
     delay(500);
 
     u8g2.clearBuffer();
-    u8g2.drawBitmap(0, 0, 16, 16, bitmap_anyma);
-    u8g2.setCursor(12, 45);
-    u8g2.print("ANYSHUT");
+    u8g2.drawBitmap(0, 1, 16, 16, bitmap_anyma);
+    char message[30];
+    memset(message, 0, 30);
+    sprintf(message, "ANYSHUT");
+    u8g2.setCursor(ALIGN_CENTER(message), 46);
+    u8g2.print(message);
     u8g2.setFont(u8g2_font_tallpixelextended_te);
-    u8g2.setCursor(4, 64);
-    u8g2.print("Version ");
-    u8g2.print(" 0 ");
+
+    sprintf(message, "Version %s", FIRMWARE_VERSION);
+    u8g2.setCursor(ALIGN_CENTER(message), 64);
+    u8g2.print(message);
     u8g2.sendBuffer();
     delay(500);
 }
 
-void display_task(void *p)
+void init_display()
 {
-
-    // init OLED display
     u8g2.begin();
     u8g2.setPowerSave(0);
     u8g2.setFont(u8g2_font_logisoso22_tr);
 
     intro();
-
-    while (1){
-  
-        vTaskDelay(DISPLAY_TASK_DELAY / portTICK_RATE_MS);
-    } 
 }
 
-void init_display()
+void fontForLength(const char *m)
 {
+    int l = strlen(m);
+    if (l < 10)
+    {
+        u8g2.setFont(u8g2_font_logisoso22_tr);
+    }
+    else if (l < 13)
+    {
+        u8g2.setFont(u8g2_font_logisoso16_tr);
+    }
+    else
+    {
+        u8g2.setFont(u8g2_font_unifont_tr);
+    }
+}
+void display(const char *message)
+{
+    u8g2.clearBuffer();
+    fontForLength(message);
+    u8g2.setCursor(ALIGN_CENTER(message), 45);
+    u8g2.print(message);
+    u8g2.sendBuffer();
+/*     Serial.println(message);
+ */}
 
-    xTaskCreatePinnedToCore(
-        display_task,            /* Function to implement the task */
-        "DISPLAY Task",          /* Name of the task */
-        DISPLAY_TASK_STACK_SIZE, /* Stack size in words */
-        NULL,                    /* Task input parameter */
-        DISPLAY_TASK_PRIORITY,   /* Priority of the task */
-        &display_task_handle,    /* Task handle. */
-        DISPLAY_TASK_CORE);      /* Core where the task should run */
+void display(const char *message, char *message2)
+{
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_logisoso16_tr);
+
+    fontForLength(message);
+    u8g2.setCursor(ALIGN_CENTER(message), 18);
+    u8g2.print(message);
+    fontForLength(message2);
+    u8g2.setCursor(ALIGN_CENTER(message2), 63);
+    u8g2.print(message2);
+
+    u8g2.sendBuffer();
+    //Serial.printf("%s %s\n", message, message2);
+}
+
+void display(const char *message, const char *message2)
+{
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_logisoso16_tr);
+
+    fontForLength(message);
+    u8g2.setCursor(ALIGN_CENTER(message), 18);
+    u8g2.print(message);
+    fontForLength(message2);
+    u8g2.setCursor(ALIGN_CENTER(message2), 64);
+    u8g2.print(message2);
+
+    u8g2.sendBuffer();
+//    Serial.printf("%s %s\n", message, message2);
+}
+
+void display(const char *message, const char *message2, const char *message3)
+{
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_logisoso16_tr);
+
+    u8g2.setCursor(ALIGN_CENTER(message), 17);
+    u8g2.print(message);
+
+    u8g2.setCursor(ALIGN_CENTER(message2), (64 + 17) / 2);
+    u8g2.print(message2);
+
+    u8g2.setCursor(ALIGN_CENTER(message3), 64);
+    u8g2.print(message3);
+
+    u8g2.sendBuffer();
+    //Serial.printf("%s %s %s\n", message, message2, message3);
+}
+
+void display(const char *message, char *message2, int p)
+{
+    u8g2.clearBuffer();
+    u8g2.setFont(u8g2_font_logisoso16_tr);
+
+    u8g2.setCursor(ALIGN_CENTER(message), 18);
+    u8g2.print(message);
+
+    u8g2.setCursor(ALIGN_CENTER(message2), (64 + 18) / 2);
+    u8g2.print(message2);
+
+    int w1 = LCDWidth - 4;
+    int w2 = round((float)w1 * (float)p / 100.);
+    u8g2.drawBox(2, 56, w2, 5);
+    u8g2.drawFrame(1, 55, w1, 7);
+    u8g2.sendBuffer();
 }

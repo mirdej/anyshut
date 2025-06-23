@@ -2,8 +2,18 @@
 #include <FastLED.h>
 #include "Display.h"
 #include <Agora.h>
+#include <esp_dmx.h>
 
-#define PING_INTERVAL 2000
+#define PING_INTERVAL 1000
+
+dmx_port_t dmxPort = 1;
+#define RX_SIZE 512
+byte data[RX_SIZE];
+
+bool dmxIsConnected = false;
+
+unsigned long lastInteraction = 0;
+unsigned long lastUpdate = millis();
 
 const int NUM_BTNS = 3;
 const int PIN_BTN[NUM_BTNS] = {2, 3, 8};
@@ -11,7 +21,7 @@ const int PIN_BTN[NUM_BTNS] = {2, 3, 8};
 const int NUM_PIXELS = 3;
 CRGB pixel[NUM_PIXELS];
 CRGB pixel_buf[NUM_PIXELS];
-
+Preferences preferences;
 
 #define PIN_DMX_RX 6
 #define PIN_PIX 7
@@ -27,13 +37,40 @@ typedef struct esp_now_message
 } esp_now_message;
 
 int last_btn[NUM_BTNS];
+int dmx_address = 1; // DMX address starts at 1
+int shutter_closed = 1;
+
+//--------------------------------------------------------------------------------
+
+void updateDisplay()
+{
+  char buf[8];
+  sprintf(buf, "%03d", dmx_address);
+  if (dmxIsConnected)
+  {
+    display("    DMX OK    ", buf);
+  }
+  else
+  {
+
+    display("---No DMX---", buf);
+  }
+}
 
 //--------------------------------------------------------------------------------
 // Callback when data is received
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
+  Serial.printf("Message from Controller: %s\n", incomingData);
+  if (!strcmp((const char *)incomingData, "OPEN"))
+  {
+    shutter_closed = 0;
+  }
+  else if (!strcmp((const char *)incomingData, "CLOSED"))
+  {
+    shutter_closed = 1;
+  }
 }
-
 
 //----------------------------------------------------------------------------------------
 //																				                                        LED Task
@@ -49,22 +86,18 @@ void led_task(void *)
     delay(5);
     FastLED.show();
   }
-  fill_solid(pixel, NUM_PIXELS, CRGB::DarkBlue);
-  fill_solid(pixel_buf, NUM_PIXELS, CRGB::DarkBlue);
 
   log_v("Running Led task");
 
   while (1)
   {
+    fill_solid(pixel, NUM_PIXELS, Agora.connected() ? CRGB(6, 6, 6) : CRGB::DarkBlue);
+    pixel[1] = shutter_closed ? CRGB::Red : CRGB::Green; // Button 2 shows shutter status
     for (int i = 0; i < NUM_BTNS; i++)
     {
       if (!digitalRead(PIN_BTN[i]))
       {
-        pixel[i + 1] = CRGB::LightCyan;
-      }
-      else
-      {
-        pixel[i + 1] = pixel_buf[i];
+        pixel[i] = CRGB::LightCyan;
       }
     }
     FastLED.show();
@@ -74,15 +107,15 @@ void led_task(void *)
   vTaskDelete(NULL); // we never get here
 }
 
-
-
 //----------------------------------------------------------------------------------------
 //																				                                      Button Task
+
 void button_task(void *)
 {
   int last_button_state[NUM_BTNS];
+  unsigned long lastButtonPress[NUM_BTNS] = {0, 0, 0};
   int button_state;
-  uint8_t buf[2];
+  int step = 1;
 
   for (int i = 0; i < NUM_BTNS; i++)
   {
@@ -90,29 +123,78 @@ void button_task(void *)
     last_button_state[i] = digitalRead(PIN_BTN[i]);
   }
 
-  log_v("Running Button task");
+  Serial.printf("Running Button task");
   while (1)
   {
+    int lastDmxAddress = dmx_address;
     for (int i = 0; i < NUM_BTNS; i++)
     {
       button_state = digitalRead(PIN_BTN[i]);
+      if (i == 1)
+      {
+        step = button_state ? 1 : 10; // Button 2 changes step size
+      }
+
       if (button_state != last_button_state[i])
       {
         last_button_state[i] = button_state;
         if (!button_state)
         {
           Serial.printf("Button %d pressed\n", i);
-          buf[0] = 127;
+          lastButtonPress[i] = millis();
+          if (i == 0)
+          {
+            dmx_address -= step;
+          }
+          else if (i == 1) // Button 2
+          {
+            char buf[20];
+            memset(buf, 0, sizeof(buf));
+            sprintf(buf, "%s", shutter_closed ? "OPEN" : "CLOSE");
+            Agora.tell(buf, sizeof(buf));
+          }
+          else if (i == 2)
+          {
+            dmx_address += step;
+          }
+          else
+          {
+            lastButtonPress[i] = 0;
+          }
         }
         else
         {
-          buf[0] = 0;
+          lastButtonPress[i] = 0;
         }
-        buf[1] = 100 + i;
-        Agora.tell(buf, 2);
+      }
+
+      if (lastButtonPress[i] > 0 && (millis() - lastButtonPress[i]) > 126)
+      {
+        lastButtonPress[i] = millis(); // reset button press
+        if (i == 0)                    // Button 1
+        {
+          dmx_address -= step;
+        }
+        else if (i == 2) // Button 3
+        {
+          dmx_address += step;
+        }
       }
     }
-    vTaskDelay(pdMS_TO_TICKS(100));
+    if (dmx_address < 1)
+    {
+      dmx_address += 512; // wrap around to 512
+    }
+    if (dmx_address > 512)
+    {
+      dmx_address -= 512; // wrap around to 1
+    }
+    if (dmx_address != lastDmxAddress)
+    {
+      lastInteraction = millis();
+      updateDisplay();
+    }
+    vTaskDelay(pdMS_TO_TICKS(25));
   }
 }
 
@@ -121,8 +203,7 @@ void button_task(void *)
 void setup()
 {
 
-
-   xTaskCreate(led_task, "LED Task", 8192, NULL, 1, NULL);
+  xTaskCreate(led_task, "LED Task", 8192, NULL, 1, NULL);
 
   Serial.begin(115200);
   vTaskDelay(pdMS_TO_TICKS(1000));
@@ -132,10 +213,21 @@ void setup()
 
   xTaskCreate(button_task, "Button", 8192, NULL, 2, NULL);
 
-  /* Agora.begin("Anyshut-DMX");
-  Agora.establish("anyshut", OnDataRecv); */
-  init_display();
+  preferences.begin("DMX-To-Anyspot");
+  dmx_address = preferences.getInt("dmx_address", 1);
+  Serial.printf("DMX Address: %d\n", dmx_address);
 
+  dmx_config_t config = DMX_CONFIG_DEFAULT;
+  dmx_personality_t personalities[] = {
+      {1, "Default Personality"}};
+  int personality_count = 1;
+  dmx_driver_install(dmxPort, &config, personalities, personality_count);
+  dmx_set_pin(dmxPort, -1, PIN_DMX_RX, -1);
+
+  init_display();
+  Agora.begin("Anyshut-DMX");
+  Agora.establish("anyshut", OnDataRecv);
+  Agora.setPingInterval(PING_INTERVAL);
 
   log_v("Setup Done");
   log_v("________________________");

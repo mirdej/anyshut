@@ -14,6 +14,7 @@ Licensed under GNU GPL 3.0
 #include "FastLED.h"
 #include "ServoEasing.hpp"
 #include "Agora.h"
+#include "Preferences.h"
 
 const int PIN_SERVO = 5;
 const int PIN_PIXEL = 17;
@@ -33,27 +34,13 @@ int last_btn;
 
 #define SERVO_DEGREES_PER_SECOND 360
 
-#define PING_INTERVAL 2000
+#define PING_INTERVAL 1000
 
-#define MESS_GET_SHUTTER 1
-#define MESS_SET_SHUTTER 2
-#define MESS_DMX 3
 
-uint8_t baseMac[6];
-
-typedef struct esp_now_message
-{
-  //  uint8_t mac[6];
-  uint8_t message;
-  uint8_t param;
-} esp_now_message;
-
-bool peer_registered = false;
-esp_now_message incoming_message;
-
-void send_shutter_state(int message_type);
-unsigned long last_ping_received;
+void send_shutter_state();
 bool connected;
+
+unsigned long lastStateSent = 0;
 
 //--------------------------------------------------------------------------------
 void set_shutter()
@@ -64,7 +51,7 @@ void set_shutter()
   FastLED.show();
   delay(20);
 
-  if (shutter_closed == 0)
+  if (shutter_closed == 1)
   {
     myservo.easeTo(position_open, SERVO_DEGREES_PER_SECOND); // set the servo position according to the scaled value
   }
@@ -72,7 +59,7 @@ void set_shutter()
   {
     myservo.easeTo(position_closed, SERVO_DEGREES_PER_SECOND);
   }
-  send_shutter_state(MESS_SET_SHUTTER);
+  send_shutter_state();
   Serial.printf("Time to move: %dms", millis() - start);
 }
 
@@ -80,11 +67,13 @@ void set_shutter()
 void myCallback(const uint8_t *macAddr, const uint8_t *incomingData, int len)
 {
   Serial.printf("Message from Controller: %s\n", incomingData);
-  if(!strcmp((const char *)incomingData, "OPEN")) {
+  if (!strcmp((const char *)incomingData, "OPEN"))
+  {
     shutter_closed = 0;
     set_shutter();
   }
-  else if(!strcmp((const char *)incomingData, "CLOSE")) {
+  else if (!strcmp((const char *)incomingData, "CLOSE"))
+  {
     shutter_closed = 1;
     set_shutter();
   }
@@ -92,13 +81,12 @@ void myCallback(const uint8_t *macAddr, const uint8_t *incomingData, int len)
 
 //----------------------------------------------------------------------------------------
 
-
-void send_shutter_state(int message_type)
+void send_shutter_state()
 {
   char buf[20];
   memset(buf, 0, sizeof(buf));
   sprintf(buf, "%s", shutter_closed ? "CLOSED" : "OPEN");
-  Agora.tell (buf,sizeof(buf));
+  Agora.tell(buf, sizeof(buf));
 }
 
 //========================================================================================
@@ -132,7 +120,7 @@ void setup()
 
   Agora.begin("Shutter", true);
   Agora.join("anyshut", myCallback);
-
+  Agora.setPingInterval(PING_INTERVAL);
   log_v("Setup Done");
   log_v("________________________");
 }
@@ -175,5 +163,11 @@ void loop()
   {
     pixel[0] = led_color;
     FastLED.show();
+  }
+
+  if (millis() - lastStateSent > 5000)
+  {
+    send_shutter_state();
+    lastStateSent = millis();
   }
 }
