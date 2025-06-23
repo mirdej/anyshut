@@ -11,26 +11,18 @@ Licensed under GNU GPL 3.0
 //                                                                                      LIB
 
 #include <Arduino.h>
-#include "FS.h"
-
 #include "FastLED.h"
-
-#include "AnymaEspSettings.h"
-#include "AnyShutEspNetworking.h"
-#include "AnymaEspPins.h"
-#include "AnymaESPUtils.h"
-
-// TODO: Add FS Switch
-#include <LittleFS.h>
-
-// #include <ESP32Servo.h>
 #include "ServoEasing.hpp"
-#include <WiFi.h>
-#include <esp_wifi.h>
-#include <esp_now.h>
+#include "Agora.h"
 
-AnymaEspSettings settings;
-AnymaEspNetworking networking;
+const int PIN_SERVO = 5;
+const int PIN_PIXEL = 17;
+const int PIN_BUTTON = 6;
+
+int shutter_closed = 1;
+int position_closed = 170;
+int position_open = 30;
+int shutter_speed = 360;
 
 //----------------------------------------------------------------------------------------
 //																				                                     User Globals
@@ -72,110 +64,41 @@ void set_shutter()
   FastLED.show();
   delay(20);
 
-  if (settings.shutter_closed == 0)
+  if (shutter_closed == 0)
   {
-
-    //   myservo.attach(PIN_SERVO, ON_POS);
-    myservo.easeTo(settings.position_open, SERVO_DEGREES_PER_SECOND); // set the servo position according to the scaled value
-                                                                      // myservo.detach();
+    myservo.easeTo(position_open, SERVO_DEGREES_PER_SECOND); // set the servo position according to the scaled value
   }
   else
   {
-    //  myservo.attach(PIN_SERVO, settings.position_open);
-    myservo.easeTo(settings.position_closed, SERVO_DEGREES_PER_SECOND);
-    //  myservo.detach();
+    myservo.easeTo(position_closed, SERVO_DEGREES_PER_SECOND);
   }
   send_shutter_state(MESS_SET_SHUTTER);
-  log_v("Time to move: %dms", millis() - start);
+  Serial.printf("Time to move: %dms", millis() - start);
 }
 
-//--------------------------------------------------------------------------------
-
-void readMacAddress()
+//----------------------------------------------------------------------------------------
+void myCallback(const uint8_t *macAddr, const uint8_t *incomingData, int len)
 {
-  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
-  if (ret == ESP_OK)
-  {
-    log_i("%02x:%02x:%02x:%02x:%02x:%02x\n",
-          baseMac[0], baseMac[1], baseMac[2],
-          baseMac[3], baseMac[4], baseMac[5]);
+  Serial.printf("Message from Controller: %s\n", incomingData);
+  if(!strcmp((const char *)incomingData, "OPEN")) {
+    shutter_closed = 0;
+    set_shutter();
   }
-  else
-  {
-    log_e("Failed to read MAC address");
+  else if(!strcmp((const char *)incomingData, "CLOSE")) {
+    shutter_closed = 1;
+    set_shutter();
   }
 }
+
+//----------------------------------------------------------------------------------------
+
 
 void send_shutter_state(int message_type)
 {
-  esp_now_message out_message;
-  out_message.message = message_type;
-  out_message.param = settings.shutter_closed;
-  esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&out_message, sizeof(out_message));
-
-  if (result == ESP_OK)
-  {
-    Serial.println("Sent with success");
-  }
-  else
-  {
-    Serial.println("Error sending the data");
-  }
-}
-
-// Callback when data is sent
-void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status)
-{
-  /*  Serial.print("\r\nLast Packet Send Status:\t");
-   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
-   if (status == 0)
-   {
-     success = "Delivery Success :)";
-   }
-   else
-   {
-     success = "Delivery Fail :(";
-   } */
-}
-
-// Callback when data is received
-void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
-{
-  memcpy(&incoming_message, incomingData, sizeof(incoming_message));
-  log_v("Bytes received: %d", len);
-  log_v("Message: %d", incoming_message.message);
-  if (incoming_message.message == MESS_SET_SHUTTER)
-  {
-    settings.shutter_closed = incoming_message.param;
-    set_shutter();
-  }
-  else if (incoming_message.message == MESS_GET_SHUTTER)
-  {
-    send_shutter_state(MESS_GET_SHUTTER);
-    last_ping_received = millis();
-  }
-  else if (incoming_message.message == MESS_DMX)
-  {
-    if (incoming_message.param == 0)
-    {
-      settings.shutter_closed = 0;
-      set_shutter();
-    }
-    else if (incoming_message.param == 255)
-    {
-      settings.shutter_closed = 1;
-      set_shutter();
-    }
-    else
-    {
-      settings.shutter_closed = incoming_message.param > 127;
-      int servoVal = map(incoming_message.param, 0, 255, settings.position_open, settings.position_closed);
-      myservo.write(servoVal);
-    }
-
-    send_shutter_state(MESS_GET_SHUTTER);
-    last_ping_received = millis();
-  }
+  char buf[20];
+  memset(buf, 0, sizeof(buf));
+  sprintf(buf, "%s", shutter_closed ? "CLOSED" : "OPEN");
+  Agora.tell (buf,sizeof(buf));
 }
 
 //========================================================================================
@@ -201,22 +124,14 @@ void setup()
     FastLED.show();
   }
 
-  // Format if there is no Filesystem, Max open files = 10 for better Webserver stability
-  MAIN_FILE_SYSTEM.begin(true, "/littlefs", 10U);
-  file_list();
-  settings.begin();
-  networking.begin();
-
   pinMode(PIN_BUTTON, INPUT_PULLUP);
   last_btn = digitalRead(PIN_BUTTON);
 
   myservo.setEasingType(EASE_CUBIC_IN_OUT); // EASE_LINEAR is default
-  myservo.attach(PIN_SERVO, settings.position_closed);
-  /*
-    log_v("Enable Wifi");
-    WiFi.mode(WIFI_STA);s
-    WiFi.begin();
-    delay(3000); */
+  myservo.attach(PIN_SERVO, position_closed);
+
+  Agora.begin("Shutter", true);
+  Agora.join("anyshut", myCallback);
 
   log_v("Setup Done");
   log_v("________________________");
@@ -241,29 +156,19 @@ void loop()
     {
       log_v("Btn pressed");
 
-      settings.shutter_closed = settings.shutter_closed ? 0 : 1;
+      shutter_closed = shutter_closed ? 0 : 1;
       set_shutter();
     }
   }
 
-  if ((millis() - last_ping_received) < (1.5 * PING_INTERVAL))
-  {
-    connected = true;
-  }
-  else
-  {
-    connected = false;
-  }
-  delay(40);
-
   CRGB led_color;
-  if (!settings.shutter_closed)
+  if (!shutter_closed)
   {
-    led_color = connected ? CRGB::DarkGray : CRGB::Orange;
+    led_color = Agora.connected() ? CRGB::DarkGray : CRGB::Orange;
   }
   else
   {
-    led_color = connected ? CRGB::Blue : CRGB::Red;
+    led_color = Agora.connected() ? CRGB::Blue : CRGB::Red;
   }
 
   if (pixel[0] != led_color)

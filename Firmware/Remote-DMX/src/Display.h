@@ -14,7 +14,7 @@
 //                                                      Display Task
 TaskHandle_t display_task_handle;
 #define DISPLAY_TASK_PRIORITY 2
-#define DISPLAY_TASK_CORE 1
+#define DISPLAY_TASK_CORE 0
 #define DISPLAY_TASK_DELAY 1000
 #define DISPLAY_TASK_STACK_SIZE 4000
 

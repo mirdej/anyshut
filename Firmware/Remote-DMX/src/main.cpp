@@ -1,19 +1,18 @@
 #include <Arduino.h>
 #include <FastLED.h>
 #include "Display.h"
-
-#include <WiFi.h>
-#include <esp_wifi.h>
-#include <esp_now.h>
+#include <Agora.h>
 
 #define PING_INTERVAL 2000
 
-uint8_t broadcastAddress[] = {0xf4, 0x12, 0xfa, 0xc1, 0x68, 0xc4};
+const int NUM_BTNS = 3;
+const int PIN_BTN[NUM_BTNS] = {2, 3, 8};
 
-const int PIN_BTN[] = {2, 3, 4};
-#define PIN_BUTTON 3
+const int NUM_PIXELS = 3;
+CRGB pixel[NUM_PIXELS];
+CRGB pixel_buf[NUM_PIXELS];
 
-#define PIN_SERVO 5
+
 #define PIN_DMX_RX 6
 #define PIN_PIX 7
 
@@ -27,88 +26,93 @@ typedef struct esp_now_message
   uint8_t param;
 } esp_now_message;
 
-bool peer_registered = false;
-esp_now_peer_info_t peerInfo;
-esp_now_message incoming_message;
-
-uint8_t baseMac[6];
-
-int last_btn;
-int shutterstate = 0;
-unsigned long last_ping;
-unsigned long last_response;
-unsigned long last_button_press;
-bool ping_waiting;
-bool shutter_moving;
-
-// Insert your SSID
-constexpr char WIFI_SSID[] = "anyshut";
-
-int32_t getWiFiChannel(const char *ssid)
-{
-  if (int32_t n = WiFi.scanNetworks())
-  {
-    for (uint8_t i = 0; i < n; i++)
-    {
-      if (!strcmp(ssid, WiFi.SSID(i).c_str()))
-      {
-        return WiFi.channel(i);
-      }
-    }
-  }
-  return 0;
-}
-
-#define NUM_PIXELS 3
-CRGB pixel[NUM_PIXELS];
-
-//--------------------------------------------------------------------------------
-
-void readMacAddress()
-{
-  esp_err_t ret = esp_wifi_get_mac(WIFI_IF_STA, baseMac);
-  if (ret == ESP_OK)
-  {
-    log_i("%02x:%02x:%02x:%02x:%02x:%02x\n",
-          baseMac[0], baseMac[1], baseMac[2],
-          baseMac[3], baseMac[4], baseMac[5]);
-  }
-  else
-  {
-    log_e("Failed to read MAC address");
-  }
-}
+int last_btn[NUM_BTNS];
 
 //--------------------------------------------------------------------------------
 // Callback when data is received
 void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 {
-  memcpy(&incoming_message, incomingData, sizeof(incoming_message));
-  //  log_v("Bytes received: %d", len);
+}
 
-  if (incoming_message.message == MESS_GET_SHUTTER)
-  {
-    last_response = millis();
-    log_v("Ping: %dms", last_response - last_ping);
-    ping_waiting = false;
-    shutterstate = incoming_message.param;
-  }
-  else if (incoming_message.message == MESS_SET_SHUTTER)
-  {
-    shutterstate = incoming_message.param;
-    shutter_moving = false;
-  }
 
-  //  log_v("Shutter state %d", shutterstate);
-  if (shutterstate == 0)
+//----------------------------------------------------------------------------------------
+//																				                                        LED Task
+
+void led_task(void *)
+{
+
+  FastLED.addLeds<SK6812, PIN_PIX, GRB>(pixel, NUM_PIXELS);
+  FastLED.setBrightness(250);
+  for (int hue = 0; hue < 360; hue++)
   {
-    pixel[0] = CRGB::DarkGray;
+    fill_rainbow(pixel, NUM_PIXELS, hue, 7);
+    delay(5);
     FastLED.show();
   }
-  else
+  fill_solid(pixel, NUM_PIXELS, CRGB::DarkBlue);
+  fill_solid(pixel_buf, NUM_PIXELS, CRGB::DarkBlue);
+
+  log_v("Running Led task");
+
+  while (1)
   {
-    pixel[0] = CRGB::Blue;
+    for (int i = 0; i < NUM_BTNS; i++)
+    {
+      if (!digitalRead(PIN_BTN[i]))
+      {
+        pixel[i + 1] = CRGB::LightCyan;
+      }
+      else
+      {
+        pixel[i + 1] = pixel_buf[i];
+      }
+    }
     FastLED.show();
+    vTaskDelay(pdMS_TO_TICKS(40)); // ~25 fps display
+  }
+
+  vTaskDelete(NULL); // we never get here
+}
+
+
+
+//----------------------------------------------------------------------------------------
+//																				                                      Button Task
+void button_task(void *)
+{
+  int last_button_state[NUM_BTNS];
+  int button_state;
+  uint8_t buf[2];
+
+  for (int i = 0; i < NUM_BTNS; i++)
+  {
+    pinMode(PIN_BTN[i], INPUT_PULLUP);
+    last_button_state[i] = digitalRead(PIN_BTN[i]);
+  }
+
+  log_v("Running Button task");
+  while (1)
+  {
+    for (int i = 0; i < NUM_BTNS; i++)
+    {
+      button_state = digitalRead(PIN_BTN[i]);
+      if (button_state != last_button_state[i])
+      {
+        last_button_state[i] = button_state;
+        if (!button_state)
+        {
+          Serial.printf("Button %d pressed\n", i);
+          buf[0] = 127;
+        }
+        else
+        {
+          buf[0] = 0;
+        }
+        buf[1] = 100 + i;
+        Agora.tell(buf, 2);
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -117,116 +121,29 @@ void OnDataRecv(const uint8_t *mac, const uint8_t *incomingData, int len)
 void setup()
 {
 
+
+   xTaskCreate(led_task, "LED Task", 8192, NULL, 1, NULL);
+
   Serial.begin(115200);
+  vTaskDelay(pdMS_TO_TICKS(1000));
 
-  FastLED.addLeds<SK6812, PIN_PIX, GRB>(pixel, NUM_PIXELS);
-  FastLED.setBrightness(100);
-  for (int hue = 0; hue < 360; hue++)
-  {
-    fill_rainbow(pixel, NUM_PIXELS, hue, 7);
-    delay(5);
-    FastLED.show();
-  }
+  log_v("________________________");
+  log_v("Setup");
 
-  Serial.println("Hello from [ a n y m a ]");
+  xTaskCreate(button_task, "Button", 8192, NULL, 2, NULL);
+
+  /* Agora.begin("Anyshut-DMX");
+  Agora.establish("anyshut", OnDataRecv); */
   init_display();
 
-  log_v("Enable Wifi");
-  WiFi.mode(WIFI_STA);
-  int32_t channel = getWiFiChannel(WIFI_SSID);
 
-  WiFi.printDiag(Serial); // Uncomment to verify channel number before
-  esp_wifi_set_promiscuous(true);
-  esp_wifi_set_channel(channel, WIFI_SECOND_CHAN_NONE);
-  esp_wifi_set_promiscuous(false);
-  WiFi.printDiag(Serial); // Uncomment to verify channel change after
-
-  WiFi.begin();
-  delay(3000);
-  log_v("[DEFAULT] ESP32 Board MAC Address: ");
-  readMacAddress();
-  pinMode(PIN_BUTTON, INPUT_PULLUP);
-  last_btn = digitalRead(PIN_BUTTON);
-
-  // Init ESP-NOW
-  if (esp_now_init() != ESP_OK)
-  {
-    log_e("Error initializing ESP-NOW");
-    return;
-  }
-
-  // Register peer
-  memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-  peerInfo.channel = 0;
-  peerInfo.encrypt = false;
-
-  // Add peer
-  if (esp_now_add_peer(&peerInfo) != ESP_OK)
-  {
-    Serial.println("Failed to add peer");
-    return;
-  }
-  esp_now_register_recv_cb(esp_now_recv_cb_t(OnDataRecv));
-
-  Serial.println("Setup Done");
+  log_v("Setup Done");
+  log_v("________________________");
 }
 //--------------------------------------------------------------------------------
 
 void loop()
 {
 
-  int btn = digitalRead(PIN_BUTTON);
-  /* log_v("Btn %d", btn);
-  delay(1000);
-   */
-
-  if ((millis() - last_button_press > 200) && (btn != last_btn))
-  {
-
-    last_btn = btn;
-    if (!btn)
-    {
-      log_v("Btn pressed");
-
-      shutterstate = shutterstate ? 0 : 1;
-
-      pixel[0] = CRGB::DarkViolet;
-      FastLED.show();
-
-      last_button_press = millis();
-      shutter_moving = true;
-
-      esp_now_message out_message;
-      out_message.message = MESS_SET_SHUTTER;
-      out_message.param = shutterstate;
-      esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&out_message, sizeof(out_message));
-    }
-  }
-
-  if (!shutter_moving && (millis() - last_ping > 3000))
-  {
-    log_v("Send Ping");
-    esp_now_message out_message;
-    out_message.message = MESS_GET_SHUTTER;
-    out_message.param = 0;
-    esp_err_t result = esp_now_send(broadcastAddress, (uint8_t *)&out_message, sizeof(out_message));
-    last_ping = millis();
-    ping_waiting = true;
-  }
-
-  if (shutter_moving && (millis() - last_button_press > 2000))
-  {
-    log_v("Shutter move should long be finished !!");
-    pixel[0] = CRGB::Red;
-    FastLED.show();
-  }
-
-  if (ping_waiting && (millis() - last_ping > 1000))
-  {
-    ping_waiting = false;
-    log_v("Lost connection");
-    pixel[0] = CRGB::Red;
-    FastLED.show();
-  }
   delay(10);
 }
